@@ -76,7 +76,7 @@
     </div>
     <canvas id="game" width="960" height="720"></canvas>
     <div class="panel controls">
-      <strong>Controls:</strong> Left/Right to move, Up/Down on ladders, Space to jump. Reach the bunker while avoiding toxic waste barrels.
+      <strong>Controls:</strong> Left/Right to move, Up/Down on ladders, Space to jump. Reach the portal while avoiding toxic waste barrels.
     </div>
   </div>
 
@@ -111,6 +111,8 @@
     let gameClock = 0;
     let explosionActive = false;
     let explosionTimer = 0;
+    let gameOverMessage = 'Press Restart to try again.';
+    let inWinZone = false;
 
     const platforms = [
       { x1: 120, y1: 640, x2: 940, y2: 600, thickness: 10 },
@@ -121,14 +123,16 @@
       { x1: 80,  y1: 110, x2: 880, y2: 110, thickness: 10 }
     ];
 
-    const ladders = [
+    const ladderDefs = [
       { x: 740, topPlatform: 1, bottomPlatform: 0, width: 28 },
       { x: 250, topPlatform: 2, bottomPlatform: 1, width: 28 },
       { x: 710, topPlatform: 3, bottomPlatform: 2, width: 28 },
       { x: 330, topPlatform: 4, bottomPlatform: 3, width: 28 },
       { x: 760, topPlatform: 5, bottomPlatform: 4, width: 28 },
       { x: 260, topPlatform: 5, bottomPlatform: 4, width: 28 }
-    ].map(l => {
+    ];
+
+    const ladders = ladderDefs.map(l => {
       const centerX = l.x + l.width / 2;
       const topY = lineYAtX(platforms[l.topPlatform], centerX);
       const bottomY = lineYAtX(platforms[l.bottomPlatform], centerX);
@@ -140,18 +144,22 @@
       };
     });
 
-    const barrelPath = [
-      { fromPlatform: 6, toPlatform: 5, x: 520 },
-      { fromPlatform: 5, toPlatform: 4, x: 200 },
-      { fromPlatform: 4, toPlatform: 3, x: 790 },
-      { fromPlatform: 3, toPlatform: 2, x: 290 },
-      { fromPlatform: 2, toPlatform: 1, x: 735 },
-      { fromPlatform: 1, toPlatform: 0, x: 220 }
-    ];
-
     const goal = { x: 790, y: 62, w: 70, h: 38 };
     const kong = { x: 120, y: 42, w: 110, h: 92 };
     const spawn = { x: 215, y: 95 };
+
+    const winZonePlatforms = [
+      { x1: 40,  y1: 650, x2: 920, y2: 650, thickness: 14 },
+      { x1: 80,  y1: 520, x2: 320, y2: 520, thickness: 14 },
+      { x1: 390, y1: 455, x2: 600, y2: 455, thickness: 14 },
+      { x1: 680, y1: 360, x2: 900, y2: 360, thickness: 14 }
+    ];
+
+    const winZoneLadders = [
+      { x: 190, yTop: 520, yBottom: 650, width: 28 },
+      { x: 480, yTop: 455, yBottom: 650, width: 28 },
+      { x: 770, yTop: 360, yBottom: 650, width: 28 }
+    ];
 
     const hazmatImg = new Image();
     let hazmatLoaded = false;
@@ -175,13 +183,19 @@
     let bunkerLoaded = false;
     bunkerImg.onload = () => { bunkerLoaded = true; };
     bunkerImg.onerror = () => { console.log('Bunker image failed to load. Check bunker.png filename and folder.'); };
-    bunkerImg.src = 'bunker.png';
+    bunkerImg.src = 'nature2.png';
 
     const explosionImg = new Image();
     let explosionLoaded = false;
     explosionImg.onload = () => { explosionLoaded = true; };
     explosionImg.onerror = () => { console.log('Explosion image failed to load. Check explosion.png filename and folder.'); };
     explosionImg.src = 'explosion.png';
+
+    const endBgImg = new Image();
+    let endBgLoaded = false;
+    endBgImg.onload = () => { endBgLoaded = true; };
+    endBgImg.onerror = () => { console.log('End background image failed to load. Check end.png filename and folder.'); };
+    endBgImg.src = 'end.png';
 
     const player = {
       x: 110,
@@ -198,6 +212,14 @@
 
     let barrels = [];
 
+    function getActivePlatforms() {
+      return inWinZone ? winZonePlatforms : platforms;
+    }
+
+    function getActiveLadders() {
+      return inWinZone ? winZoneLadders : ladders;
+    }
+
     function resetPlayer(fullReset = false) {
       player.x = 110;
       player.y = 580;
@@ -208,14 +230,18 @@
       player.invuln = 90;
       explosionActive = false;
       explosionTimer = 0;
+
       if (fullReset) {
         lives = 3;
         gameOver = false;
         win = false;
+        inWinZone = false;
+        gameOverMessage = 'Press Restart to try again.';
         barrels = [];
         barrelSpawnTimer = 40;
         gameClock = 0;
       }
+
       updateHud();
     }
 
@@ -228,10 +254,52 @@
       return line.y1 + t * (line.y2 - line.y1);
     }
 
+    function lerp(a, b, t) {
+      return a + (b - a) * t;
+    }
+
+    function hexToRgb(hex) {
+      const clean = hex.replace('#', '');
+      return {
+        r: parseInt(clean.substring(0, 2), 16),
+        g: parseInt(clean.substring(2, 4), 16),
+        b: parseInt(clean.substring(4, 6), 16)
+      };
+    }
+
+    function rgbToHex(r, g, b) {
+      return '#' + [r, g, b].map(v => {
+        const clamped = Math.max(0, Math.min(255, Math.round(v)));
+        return clamped.toString(16).padStart(2, '0');
+      }).join('');
+    }
+
+    function blendColor(c1, c2, t) {
+      const a = hexToRgb(c1);
+      const b = hexToRgb(c2);
+      return rgbToHex(
+        lerp(a.r, b.r, t),
+        lerp(a.g, b.g, t),
+        lerp(a.b, b.b, t)
+      );
+    }
+
+    function smoothstep(edge0, edge1, x) {
+      const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
+      return t * t * (3 - 2 * t);
+    }
+
+    function getNatureProgress(y) {
+      const normalized = 1 - (y / H);
+      return smoothstep(0.12, 0.95, normalized);
+    }
+
     function findSupportingPlatform(entity) {
+      const activePlatforms = getActivePlatforms();
       const footX = entity.x + entity.w / 2;
       const footY = entity.y + entity.h;
-      for (const p of platforms) {
+
+      for (const p of activePlatforms) {
         const minX = Math.min(p.x1, p.x2);
         const maxX = Math.max(p.x1, p.x2);
         if (footX >= minX - 4 && footX <= maxX + 4) {
@@ -245,9 +313,11 @@
     }
 
     function findCeilingPlatform(entity, prevTopY) {
+      const activePlatforms = getActivePlatforms();
       const headX = entity.x + entity.w / 2;
       const headY = entity.y;
-      for (const p of platforms) {
+
+      for (const p of activePlatforms) {
         const minX = Math.min(p.x1, p.x2);
         const maxX = Math.max(p.x1, p.x2);
         if (headX >= minX + PLAYER_HEAD_BONK_MARGIN && headX <= maxX - PLAYER_HEAD_BONK_MARGIN) {
@@ -262,10 +332,12 @@
     }
 
     function overlappingLadder(entity) {
+      const activeLadders = getActiveLadders();
       const centerX = entity.x + entity.w / 2;
       const topY = entity.y;
       const bottomY = entity.y + entity.h;
-      return ladders.find(l =>
+
+      return activeLadders.find(l =>
         centerX >= l.x && centerX <= l.x + l.width &&
         bottomY >= l.yTop && topY <= l.yBottom
       ) || null;
@@ -337,10 +409,11 @@
       if (player.invuln > 0) player.invuln--;
     }
 
-    function triggerExplosionGameOver() {
+    function triggerExplosionGameOver(message = 'Press Restart to try again.') {
       explosionActive = true;
       explosionTimer = 30;
       gameOver = true;
+      gameOverMessage = message;
     }
 
     function updateBarrels() {
@@ -482,11 +555,22 @@
         player.y < goal.y + goal.h &&
         player.y + player.h > goal.y
       ) {
-        win = true;
+        inWinZone = true;
+        barrels = [];
+        player.x = 90;
+        player.y = 590;
+        player.vx = 0;
+        player.vy = 0;
+        player.onGround = false;
+        player.onLadder = false;
+        player.invuln = 0;
       }
     }
 
     function drawPlatform(p) {
+      const midY = (p.y1 + p.y2) / 2;
+      const t = getNatureProgress(midY);
+
       const dx = p.x2 - p.x1;
       const dy = p.y2 - p.y1;
       const len = Math.hypot(dx, dy);
@@ -504,7 +588,18 @@
       const bottomRight = { x: p.x2 + px * (beamDepth / 2), y: p.y2 + py * (beamDepth / 2) };
       const bottomLeft = { x: p.x1 + px * (beamDepth / 2), y: p.y1 + py * (beamDepth / 2) };
 
-      ctx.fillStyle = '#4e545c';
+      const style = {
+        main: blendColor('#4e545c', '#4e7a3d', t),
+        top: blendColor('#8e98a3', '#b9ef8f', t),
+        bottom: blendColor('#2b2f35', '#355229', t),
+        center: blendColor('#3a4048', '#426735', t),
+        brace: blendColor('#23272d', '#2d4725', t),
+        bolt: blendColor('#1f2227', '#23331d', t),
+        vine: blendColor('#4d6b3c', '#55b83b', t),
+        moss: blendColor('#6f8a46', '#b8ff7a', t)
+      };
+
+      ctx.fillStyle = style.main;
       ctx.beginPath();
       ctx.moveTo(topLeft.x, topLeft.y);
       ctx.lineTo(topRight.x, topRight.y);
@@ -513,7 +608,7 @@
       ctx.closePath();
       ctx.fill();
 
-      ctx.strokeStyle = '#8e98a3';
+      ctx.strokeStyle = style.top;
       ctx.lineWidth = flangeThickness;
       ctx.beginPath();
       ctx.moveTo(
@@ -526,7 +621,7 @@
       );
       ctx.stroke();
 
-      ctx.strokeStyle = '#2b2f35';
+      ctx.strokeStyle = style.bottom;
       ctx.lineWidth = flangeThickness;
       ctx.beginPath();
       ctx.moveTo(
@@ -539,7 +634,7 @@
       );
       ctx.stroke();
 
-      ctx.strokeStyle = '#3a4048';
+      ctx.strokeStyle = style.center;
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.moveTo(p.x1, p.y1);
@@ -553,7 +648,7 @@
         const x = p.x1 + ux * dist;
         const y = p.y1 + uy * dist;
 
-        ctx.strokeStyle = '#23272d';
+        ctx.strokeStyle = style.brace;
         ctx.lineWidth = 2;
 
         ctx.beginPath();
@@ -571,7 +666,7 @@
         const x = p.x1 + ux * dist;
         const y = p.y1 + uy * dist;
 
-        ctx.fillStyle = '#1f2227';
+        ctx.fillStyle = style.bolt;
         ctx.beginPath();
         ctx.arc(x - px * 4, y - py * 4, 2, 0, Math.PI * 2);
         ctx.fill();
@@ -580,30 +675,119 @@
         ctx.arc(x + px * 4, y + py * 4, 2, 0, Math.PI * 2);
         ctx.fill();
       }
+
+      if (t > 0.12) {
+        for (let dist = 18; dist < len - 18; dist += 60) {
+          const x = p.x1 + ux * dist;
+          const y = p.y1 + uy * dist;
+
+          ctx.fillStyle = style.moss;
+          ctx.beginPath();
+          ctx.ellipse(
+            x - px * 6,
+            y - py * 6,
+            8 + 6 * t,
+            3 + 2 * t,
+            Math.atan2(uy, ux),
+            0,
+            Math.PI * 2
+          );
+          ctx.fill();
+        }
+      }
+
+      if (t > 0.2) {
+        for (let dist = 40; dist < len - 30; dist += 90) {
+          const x = p.x1 + ux * dist;
+          const y = p.y1 + uy * dist;
+
+          const vineLength = 12 + 18 * t;
+
+          ctx.strokeStyle = style.vine;
+          ctx.lineWidth = 2 + t;
+          ctx.beginPath();
+          ctx.moveTo(x, y);
+          ctx.bezierCurveTo(
+            x - 8,
+            y + vineLength * 0.35,
+            x + 10,
+            y + vineLength * 0.7,
+            x - 4,
+            y + vineLength
+          );
+          ctx.stroke();
+
+          ctx.fillStyle = style.moss;
+          ctx.beginPath();
+          ctx.ellipse(x - 5, y + vineLength * 0.35, 3 + 2 * t, 2, -0.5, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.beginPath();
+          ctx.ellipse(x + 3, y + vineLength * 0.65, 3 + 2 * t, 2, 0.5, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
     }
 
     function drawLadder(l) {
+      const midY = (l.yTop + l.yBottom) / 2;
+      const t = getNatureProgress(midY);
       const railWidth = 6;
 
-      ctx.fillStyle = '#4e545c';
+      const style = {
+        rail: blendColor('#4e545c', '#4a7d3e', t),
+        railHighlight: blendColor('#9aa3ad', '#c0f49a', t),
+        rung: blendColor('#6c737c', '#5f9650', t),
+        rungHighlight: blendColor('#cfd6dd', '#e5ffd0', t),
+        vine: blendColor('#56723f', '#4fbb39', t),
+        leaf: blendColor('#7aa24d', '#baff7f', t)
+      };
+
+      ctx.fillStyle = style.rail;
       ctx.fillRect(l.x, l.yTop, railWidth, l.yBottom - l.yTop);
       ctx.fillRect(l.x + l.width - railWidth, l.yTop, railWidth, l.yBottom - l.yTop);
 
-      ctx.fillStyle = '#9aa3ad';
+      ctx.fillStyle = style.railHighlight;
       ctx.fillRect(l.x + 1, l.yTop, 2, l.yBottom - l.yTop);
       ctx.fillRect(l.x + l.width - 3, l.yTop, 2, l.yBottom - l.yTop);
 
+      let rungCount = 0;
       for (let y = l.yTop + 10; y < l.yBottom - 6; y += 16) {
-        ctx.fillStyle = '#6c737c';
+        ctx.fillStyle = style.rung;
         ctx.fillRect(l.x + railWidth, y, l.width - railWidth * 2, 5);
 
-        ctx.fillStyle = '#cfd6dd';
+        ctx.fillStyle = style.rungHighlight;
         ctx.fillRect(l.x + railWidth + 1, y, l.width - railWidth * 2 - 2, 2);
+
+        if (t > 0.18 && rungCount % 2 === 0) {
+          const vineAmount = 0.35 + t * 0.8;
+
+          ctx.strokeStyle = style.vine;
+          ctx.lineWidth = 2 + t * 0.5;
+          ctx.beginPath();
+          ctx.moveTo(l.x + 4, y - 2);
+          ctx.bezierCurveTo(
+            l.x - 4, y + 4,
+            l.x + 10, y + 8 + 4 * vineAmount,
+            l.x + 3, y + 12 + 6 * vineAmount
+          );
+          ctx.stroke();
+
+          ctx.fillStyle = style.leaf;
+          ctx.beginPath();
+          ctx.ellipse(l.x + 1, y + 5, 3 + 2 * t, 2, -0.6, 0, Math.PI * 2);
+          ctx.fill();
+
+          ctx.beginPath();
+          ctx.ellipse(l.x + 7, y + 11, 3 + 2 * t, 2, 0.6, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        rungCount++;
       }
     }
 
     function drawPlayer() {
-      if (player.invuln > 0 && Math.floor(player.invuln / 5) % 2 === 0) return;
+      if (!inWinZone && player.invuln > 0 && Math.floor(player.invuln / 5) % 2 === 0) return;
 
       if (playerLoaded) {
         const imgW = 40;
@@ -720,7 +904,9 @@
     }
 
     function drawHUDOverlay() {
+      if (inWinZone) return;
       if (!gameOver && !win) return;
+
       ctx.fillStyle = 'rgba(0, 0, 0, 0.62)';
       ctx.fillRect(0, 0, W, H);
       ctx.fillStyle = '#fff';
@@ -728,7 +914,7 @@
       ctx.font = 'bold 52px Arial';
       ctx.fillText(win ? 'YOU WIN!' : 'GAME OVER', W / 2, H / 2 - 20);
       ctx.font = '24px Arial';
-      ctx.fillText(win ? 'You reached the bunker.' : 'Press Restart to try again.', W / 2, H / 2 + 30);
+      ctx.fillText(win ? 'You reached the bunker.' : gameOverMessage, W / 2, H / 2 + 30);
       ctx.textAlign = 'left';
     }
 
@@ -791,29 +977,7 @@
         ctx.fill();
       }
 
-      ctx.strokeStyle = '#4a4038';
-      ctx.lineWidth = 14;
-      ctx.beginPath();
-      ctx.moveTo(8, H - 44);
-      ctx.lineTo(50, H - 44);
-      ctx.moveTo(W - 54, H - 56);
-      ctx.lineTo(W - 10, H - 56);
-      ctx.stroke();
 
-      ctx.fillStyle = '#8cff29';
-      ctx.beginPath();
-      ctx.moveTo(50, H - 38);
-      ctx.lineTo(62, H - 10);
-      ctx.lineTo(38, H - 10);
-      ctx.closePath();
-      ctx.fill();
-
-      ctx.beginPath();
-      ctx.moveTo(W - 54, H - 50);
-      ctx.lineTo(W - 42, H - 16);
-      ctx.lineTo(W - 64, H - 16);
-      ctx.closePath();
-      ctx.fill();
 
       for (const p of platforms) drawPlatform(p);
       for (const l of ladders) drawLadder(l);
@@ -847,13 +1011,93 @@
       }
     }
 
+    function drawWinZoneBackground() {
+      ctx.clearRect(0, 0, W, H);
+
+      if (endBgLoaded) {
+        ctx.drawImage(endBgImg, 0, 0, W, H);
+      } else {
+        const sky = ctx.createLinearGradient(0, 0, 0, H);
+        sky.addColorStop(0, '#94c7d8');
+        sky.addColorStop(0.55, '#5d9a7b');
+        sky.addColorStop(1, '#2f5f41');
+        ctx.fillStyle = sky;
+        ctx.fillRect(0, 0, W, H);
+      }
+
+      for (const p of winZonePlatforms) {
+        const dx = p.x2 - p.x1;
+        const dy = p.y2 - p.y1;
+        const len = Math.hypot(dx, dy);
+        const ux = dx / len;
+        const uy = dy / len;
+        const px = -uy;
+        const py = ux;
+        const thickness = p.thickness;
+
+        const topLeft = { x: p.x1 - px * (thickness / 2), y: p.y1 - py * (thickness / 2) };
+        const topRight = { x: p.x2 - px * (thickness / 2), y: p.y2 - py * (thickness / 2) };
+        const bottomRight = { x: p.x2 + px * (thickness / 2), y: p.y2 + py * (thickness / 2) };
+        const bottomLeft = { x: p.x1 + px * (thickness / 2), y: p.y1 + py * (thickness / 2) };
+
+        ctx.fillStyle = '#5c4631';
+        ctx.beginPath();
+        ctx.moveTo(topLeft.x, topLeft.y);
+        ctx.lineTo(topRight.x, topRight.y);
+        ctx.lineTo(bottomRight.x, bottomRight.y);
+        ctx.lineTo(bottomLeft.x, bottomLeft.y);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.strokeStyle = '#87c760';
+        ctx.lineWidth = 6;
+        ctx.beginPath();
+        ctx.moveTo(p.x1, p.y1 - 6);
+        ctx.lineTo(p.x2, p.y2 - 6);
+        ctx.stroke();
+
+        ctx.fillStyle = '#a7e57a';
+        for (let x = Math.min(p.x1, p.x2) + 15; x < Math.max(p.x1, p.x2) - 10; x += 45) {
+          ctx.beginPath();
+          ctx.ellipse(x, lineYAtX(p, x) - 6, 12, 4, 0, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      for (const l of winZoneLadders) {
+        const railWidth = 6;
+        ctx.fillStyle = '#72624c';
+        ctx.fillRect(l.x, l.yTop, railWidth, l.yBottom - l.yTop);
+        ctx.fillRect(l.x + l.width - railWidth, l.yTop, railWidth, l.yBottom - l.yTop);
+
+        ctx.fillStyle = '#d6d0b2';
+        for (let y = l.yTop + 10; y < l.yBottom - 6; y += 16) {
+          ctx.fillRect(l.x + railWidth, y, l.width - railWidth * 2, 5);
+        }
+      }
+
+      ctx.fillStyle = 'rgba(0,0,0,0.25)';
+      ctx.fillRect(0, 0, W, 90);
+
+      ctx.fillStyle = '#fff';
+      ctx.textAlign = 'center';
+      ctx.font = 'bold 34px Arial';
+      ctx.fillText('You progressed towards a better future!', W / 2, 45);
+      ctx.font = '20px Arial';
+      ctx.fillText('Congrats!!!', W / 2, 72);
+      ctx.textAlign = 'left';
+    }
+
     function draw() {
+      if (inWinZone) {
+        drawWinZoneBackground();
+        drawPlayer();
+        return;
+      }
+
       drawBackground();
       for (const b of barrels) drawBarrel(b);
       drawPlayer();
-
-
-
       drawExplosion();
       drawHUDOverlay();
     }
@@ -866,7 +1110,15 @@
         }
       }
 
-      if (gameOver || win) return;
+      if (gameOver) return;
+
+      if (inWinZone) {
+        updatePlayer();
+        return;
+      }
+
+      if (win) return;
+
       gameClock++;
       barrelSpawnTimer--;
       if (barrelSpawnTimer <= 0) {
@@ -879,11 +1131,8 @@
       updateBarrels();
       checkGoal();
 
-      if (player.y > H + 40) {
-        lives -= 1;
-        updateHud();
-        if (lives <= 0) triggerExplosionGameOver();
-        else resetPlayer(false);
+      if (player.y + player.h >= H) {
+        triggerExplosionGameOver('You chose to ignore the problem');
       }
     }
 
